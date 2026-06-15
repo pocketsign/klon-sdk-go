@@ -102,6 +102,9 @@ type AuthorizeOptions struct {
 }
 ```
 
+`MaxAge` を指定した場合、値は `AuthorizationSession` に保存され、`ExchangeCode` 時に ID Token の `auth_time` が検証される。
+PAR を使う場合も、`oidc.ClientContext` / `oauth2.HTTPClient` で `ctx` に設定した HTTP client が使用される。
+
 #### `Client.ExchangeCode(ctx, code, state string, session *AuthorizationSession) (*TokenSet, error)`
 
 認可コードをトークンに交換する。`code` と `state` はコールバック URL のクエリパラメータ。PKCE 検証、nonce 検証、ID トークン検証を行う。
@@ -117,7 +120,7 @@ fmt.Println(tokenSet.IDTokenClaims.JPKIVerified)  // JPKI 紐づけ状態
 
 #### `Client.RefreshToken(ctx, refreshToken string) (*TokenSet, error)`
 
-リフレッシュトークンでアクセストークンを更新する。レスポンスに新しい ID Token が含まれる場合は `IDTokenClaims` もセットされる。
+リフレッシュトークンでアクセストークンを更新する。レスポンスに新しい ID Token が含まれる場合は署名・issuer・audience・expiry を検証し、成功した場合のみ `IDTokenClaims` もセットされる。
 
 ### TokenSet
 

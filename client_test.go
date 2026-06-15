@@ -1,7 +1,6 @@
 package klon
 
 import (
-	"context"
 	"crypto"
 	"crypto/rand"
 	"crypto/rsa"
@@ -12,13 +11,24 @@ import (
 	"testing"
 	"time"
 
+	"github.com/coreos/go-oidc/v3/oidc"
 	"github.com/go-jose/go-jose/v4"
 	"github.com/go-jose/go-jose/v4/jwt"
 	"github.com/stretchr/testify/require"
 )
 
+type testOIDCServerOptions struct {
+	authTimeOffset         time.Duration
+	refreshIDTokenOverride string
+	requirePARCustomHeader bool
+}
+
 // testOIDCServer creates a mock OIDC server with discovery, JWKS, token, and PAR endpoints.
 func testOIDCServer(t *testing.T) (*httptest.Server, crypto.Signer) {
+	return testOIDCServerWithOptions(t, testOIDCServerOptions{})
+}
+
+func testOIDCServerWithOptions(t *testing.T, opts testOIDCServerOptions) (*httptest.Server, crypto.Signer) {
 	t.Helper()
 
 	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
@@ -67,6 +77,7 @@ func testOIDCServer(t *testing.T) (*httptest.Server, crypto.Signer) {
 		}
 
 		now := time.Now()
+		authTime := now.Add(opts.authTimeOffset)
 		claims := jwt.Claims{
 			Issuer:    serverURL,
 			Subject:   "test-user",
@@ -85,7 +96,7 @@ func testOIDCServer(t *testing.T) (*httptest.Server, crypto.Signer) {
 		}
 		extra := extraClaims{
 			Nonce:        nonce,
-			AuthTime:     now.Unix(),
+			AuthTime:     authTime.Unix(),
 			ACR:          "urn:klon:acr:high",
 			AMR:          []string{"mpa"},
 			JPKIVerified: true,
@@ -98,6 +109,9 @@ func testOIDCServer(t *testing.T) (*httptest.Server, crypto.Signer) {
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
+		}
+		if r.Form.Get("grant_type") == "refresh_token" && opts.refreshIDTokenOverride != "" {
+			idToken = opts.refreshIDTokenOverride
 		}
 
 		resp := map[string]any{
@@ -114,6 +128,10 @@ func testOIDCServer(t *testing.T) (*httptest.Server, crypto.Signer) {
 	})
 
 	mux.HandleFunc("/par", func(w http.ResponseWriter, r *http.Request) {
+		if opts.requirePARCustomHeader && r.Header.Get("X-Test-HTTP-Client") != "1" {
+			http.Error(w, "missing custom HTTP client", http.StatusTeapot)
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
 		_ = json.NewEncoder(w).Encode(map[string]any{
@@ -127,6 +145,12 @@ func testOIDCServer(t *testing.T) (*httptest.Server, crypto.Signer) {
 	t.Cleanup(server.Close)
 
 	return server, privateKey
+}
+
+type roundTripperFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripperFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return f(req)
 }
 
 func TestClient_Authorize(t *testing.T) {
@@ -162,7 +186,7 @@ func TestClient_Authorize(t *testing.T) {
 
 	t.Run("includes optional parameters", func(t *testing.T) {
 		maxAge := 300
-		authURL, _, err := client.CreateAuthorizationURL(t.Context(), AuthorizeOptions{
+		authURL, session, err := client.CreateAuthorizationURL(t.Context(), AuthorizeOptions{
 			Scopes:    []string{"openid", "profile", "email"},
 			AcrValues: []string{AcrHigh},
 			Prompt:    []string{"consent"},
@@ -181,6 +205,8 @@ func TestClient_Authorize(t *testing.T) {
 		require.Equal(t, "300", q.Get("max_age"))
 		require.NotEmpty(t, q.Get("authorization_details"))
 		require.Equal(t, "create", q.Get("grant_management_action"))
+		require.NotNil(t, session.MaxAge)
+		require.Equal(t, 300, *session.MaxAge)
 	})
 
 	t.Run("PAR generates URL with request_uri", func(t *testing.T) {
@@ -193,6 +219,37 @@ func TestClient_Authorize(t *testing.T) {
 		require.Equal(t, "test-client", q.Get("client_id"))
 		require.Equal(t, "urn:example:par:request_uri:12345", q.Get("request_uri"))
 		require.Empty(t, q.Get("code_challenge"))
+	})
+
+	t.Run("PAR uses custom HTTP client from context", func(t *testing.T) {
+		server, _ := testOIDCServerWithOptions(t, testOIDCServerOptions{
+			requirePARCustomHeader: true,
+		})
+		client := NewClient(ClientConfig{
+			Issuer:      server.URL,
+			ClientID:    "test-client",
+			RedirectURI: "http://localhost/callback",
+		})
+		httpClient := &http.Client{
+			Transport: roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+				req.Header.Set("X-Test-HTTP-Client", "1")
+				return http.DefaultTransport.RoundTrip(req)
+			}),
+		}
+		ctx := oidc.ClientContext(t.Context(), httpClient)
+
+		authURL, _, err := client.CreateAuthorizationURL(ctx, AuthorizeOptions{UsePAR: true})
+
+		require.NoError(t, err)
+		require.Equal(t, "urn:example:par:request_uri:12345", authURL.Query().Get("request_uri"))
+	})
+
+	t.Run("prompt=none と他 prompt の併用はエラー", func(t *testing.T) {
+		_, _, err := client.CreateAuthorizationURL(t.Context(), AuthorizeOptions{
+			Prompt: []string{PromptNone, PromptLogin},
+		})
+
+		require.ErrorContains(t, err, "prompt=none cannot be combined")
 	})
 }
 
@@ -249,6 +306,49 @@ func TestClient_ExchangeCode(t *testing.T) {
 		_, err = client.ExchangeCode(t.Context(), "test-code", session.State, session)
 		require.ErrorContains(t, err, "nonce mismatch")
 	})
+
+	t.Run("max_age 指定時は auth_time を検証する", func(t *testing.T) {
+		server, _ := testOIDCServerWithOptions(t, testOIDCServerOptions{
+			authTimeOffset: -2 * time.Minute,
+		})
+		client := NewClient(ClientConfig{
+			Issuer:       server.URL,
+			ClientID:     "test-client",
+			ClientSecret: "test-secret",
+			RedirectURI:  "http://localhost/callback",
+		})
+		maxAge := 60
+		_, session, err := client.CreateAuthorizationURL(t.Context(), AuthorizeOptions{
+			MaxAge: &maxAge,
+		})
+		require.NoError(t, err)
+		session.Nonce = "test-nonce"
+
+		_, err = client.ExchangeCode(t.Context(), "test-code", session.State, session)
+
+		require.ErrorContains(t, err, "auth_time")
+	})
+
+	t.Run("max_age が 0 でも直近の auth_time なら成功する", func(t *testing.T) {
+		server, _ := testOIDCServer(t)
+		client := NewClient(ClientConfig{
+			Issuer:       server.URL,
+			ClientID:     "test-client",
+			ClientSecret: "test-secret",
+			RedirectURI:  "http://localhost/callback",
+		})
+		maxAge := 0
+		_, session, err := client.CreateAuthorizationURL(t.Context(), AuthorizeOptions{
+			MaxAge: &maxAge,
+		})
+		require.NoError(t, err)
+		session.Nonce = "test-nonce"
+
+		tokenSet, err := client.ExchangeCode(t.Context(), "test-code", session.State, session)
+
+		require.NoError(t, err)
+		require.NotNil(t, tokenSet)
+	})
 }
 
 func TestClient_Refresh(t *testing.T) {
@@ -271,6 +371,22 @@ func TestClient_Refresh(t *testing.T) {
 		require.Equal(t, "test-user", tokenSet.IDTokenClaims.Subject)
 		require.Equal(t, "urn:klon:acr:high", tokenSet.IDTokenClaims.ACR)
 		require.True(t, tokenSet.IDTokenClaims.JPKIVerified)
+	})
+
+	t.Run("refresh token response の ID Token が不正ならエラー", func(t *testing.T) {
+		server, _ := testOIDCServerWithOptions(t, testOIDCServerOptions{
+			refreshIDTokenOverride: "invalid.jwt.signature",
+		})
+		client := NewClient(ClientConfig{
+			Issuer:       server.URL,
+			ClientID:     "test-client",
+			ClientSecret: "test-secret",
+			RedirectURI:  "http://localhost/callback",
+		})
+
+		_, err := client.RefreshToken(t.Context(), "test-refresh-token")
+
+		require.ErrorContains(t, err, "ID token verification failed")
 	})
 }
 
@@ -303,10 +419,9 @@ func TestClient_DiscoveryCaching(t *testing.T) {
 		RedirectURI: "http://localhost/callback",
 	})
 
-	ctx := context.Background()
-	_, _, err := client.CreateAuthorizationURL(ctx)
+	_, _, err := client.CreateAuthorizationURL(t.Context())
 	require.NoError(t, err)
-	_, _, err = client.CreateAuthorizationURL(ctx)
+	_, _, err = client.CreateAuthorizationURL(t.Context())
 	require.NoError(t, err)
 
 	require.Equal(t, 1, callCount, "discovery should be called only once")
@@ -339,7 +454,7 @@ func TestClient_PARWithoutEndpoint(t *testing.T) {
 		RedirectURI: "http://localhost/callback",
 	})
 
-	_, _, err := client.CreateAuthorizationURL(context.Background(), AuthorizeOptions{
+	_, _, err := client.CreateAuthorizationURL(t.Context(), AuthorizeOptions{
 		UsePAR: true,
 	})
 	require.ErrorContains(t, err, "pushed_authorization_request_endpoint")
@@ -392,26 +507,6 @@ func TestAudience_UnmarshalJSON(t *testing.T) {
 		err := json.Unmarshal([]byte(`["client-1","client-2"]`), &a)
 		require.NoError(t, err)
 		require.Equal(t, Audience{"client-1", "client-2"}, a)
-	})
-}
-
-func TestDecodeIDTokenPayload(t *testing.T) {
-	t.Run("valid JWT", func(t *testing.T) {
-		var claims IDTokenClaims
-		// Minimal JWT with base64url-encoded payload: {"sub":"test","jpki_verified":true}
-		payload := "eyJzdWIiOiJ0ZXN0IiwianBraV92ZXJpZmllZCI6dHJ1ZX0"
-		rawJWT := "eyJhbGciOiJSUzI1NiJ9." + payload + ".signature"
-		err := decodeIDTokenPayload(rawJWT, &claims)
-		require.NoError(t, err)
-		require.Equal(t, "test", claims.Subject)
-		require.True(t, claims.JPKIVerified)
-	})
-
-	t.Run("invalid format", func(t *testing.T) {
-		var claims IDTokenClaims
-		err := decodeIDTokenPayload("not-a-jwt", &claims)
-		require.Error(t, err)
-		require.Contains(t, err.Error(), "invalid JWT format")
 	})
 }
 
