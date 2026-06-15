@@ -2,7 +2,6 @@ package klon
 
 import (
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -10,6 +9,7 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
 	"golang.org/x/oauth2"
@@ -39,6 +39,7 @@ type AuthorizationSession struct {
 	Nonce        string `json:"nonce"`
 	CodeVerifier string `json:"code_verifier"`
 	RedirectURI  string `json:"redirect_uri"`
+	MaxAge       *int   `json:"max_age,omitempty"`
 }
 
 type TokenSet struct {
@@ -95,6 +96,9 @@ func (c *Client) CreateAuthorizationURL(ctx context.Context, opts ...AuthorizeOp
 	if len(opts) > 0 {
 		opt = opts[0]
 	}
+	if err := validatePromptValues(opt.Prompt); err != nil {
+		return nil, nil, err
+	}
 
 	provider, err := c.discover(ctx)
 	if err != nil {
@@ -121,7 +125,7 @@ func (c *Client) CreateAuthorizationURL(ctx context.Context, opts ...AuthorizeOp
 		}
 	}
 	acrValues := strings.Join(opt.AcrValues, " ")
-	prompt := strings.Join(opt.Prompt, " ")
+	prompt := BuildPrompt(opt.Prompt...)
 
 	var endpoint struct {
 		AuthURL  string `json:"authorization_endpoint"`
@@ -188,6 +192,10 @@ func (c *Client) CreateAuthorizationURL(ctx context.Context, opts ...AuthorizeOp
 		CodeVerifier: codeVerifier,
 		RedirectURI:  c.config.RedirectURI,
 	}
+	if opt.MaxAge != nil {
+		maxAge := *opt.MaxAge
+		session.MaxAge = &maxAge
+	}
 
 	return authURL, session, nil
 }
@@ -229,10 +237,7 @@ func (c *Client) ExchangeCode(ctx context.Context, code string, state string, se
 		return nil, fmt.Errorf("no id_token in token response")
 	}
 
-	verifier := provider.Verifier(&oidc.Config{
-		ClientID: c.config.ClientID,
-	})
-	idToken, err := verifier.Verify(ctx, rawIDToken)
+	idToken, claims, err := c.verifyIDToken(ctx, provider, rawIDToken)
 	if err != nil {
 		return nil, fmt.Errorf("ID token verification failed: %w", err)
 	}
@@ -241,9 +246,8 @@ func (c *Client) ExchangeCode(ctx context.Context, code string, state string, se
 		return nil, fmt.Errorf("nonce mismatch: expected %q, got %q", session.Nonce, idToken.Nonce)
 	}
 
-	var claims IDTokenClaims
-	if err := idToken.Claims(&claims); err != nil {
-		return nil, fmt.Errorf("failed to decode ID token claims: %w", err)
+	if err := validateMaxAge(session.MaxAge, claims.AuthTime); err != nil {
+		return nil, err
 	}
 
 	tokenSet := &TokenSet{
@@ -251,7 +255,7 @@ func (c *Client) ExchangeCode(ctx context.Context, code string, state string, se
 		TokenType:     token.TokenType,
 		RefreshToken:  token.RefreshToken,
 		IDToken:       rawIDToken,
-		IDTokenClaims: &claims,
+		IDTokenClaims: claims,
 	}
 
 	if !token.Expiry.IsZero() {
@@ -312,10 +316,11 @@ func (c *Client) RefreshToken(ctx context.Context, refreshToken string) (*TokenS
 
 	if rawIDToken, ok := token.Extra("id_token").(string); ok {
 		tokenSet.IDToken = rawIDToken
-		var claims IDTokenClaims
-		if err := decodeIDTokenPayload(rawIDToken, &claims); err == nil {
-			tokenSet.IDTokenClaims = &claims
+		_, claims, err := c.verifyIDToken(ctx, provider, rawIDToken)
+		if err != nil {
+			return nil, fmt.Errorf("ID token verification failed: %w", err)
 		}
+		tokenSet.IDTokenClaims = claims
 	}
 
 	if scope, ok := token.Extra("scope").(string); ok {
@@ -366,7 +371,7 @@ func (c *Client) pushedAuthorizationRequest(
 		form.Set("acr_values", strings.Join(opt.AcrValues, " "))
 	}
 	if len(opt.Prompt) > 0 {
-		form.Set("prompt", strings.Join(opt.Prompt, " "))
+		form.Set("prompt", BuildPrompt(opt.Prompt...))
 	}
 	if opt.MaxAge != nil {
 		form.Set("max_age", fmt.Sprintf("%d", *opt.MaxAge))
@@ -381,7 +386,8 @@ func (c *Client) pushedAuthorizationRequest(
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
-	resp, err := http.DefaultClient.Do(req)
+	httpClient := httpClientFromContext(ctx)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("PAR request failed: %w", err)
 	}
@@ -411,18 +417,56 @@ func (c *Client) pushedAuthorizationRequest(
 	return parResp.RequestURI, nil
 }
 
-// decodeIDTokenPayload は JWT ペイロード部分を base64 デコードして v にアンマーシャルする。
-// 検証済みトークンのクレーム取得用。RefreshToken レスポンスで新しい ID Token が含まれる場合に使用する。
-func decodeIDTokenPayload(rawJWT string, v any) error {
-	parts := strings.SplitN(rawJWT, ".", 3)
-	if len(parts) != 3 {
-		return fmt.Errorf("invalid JWT format: expected 3 parts, got %d", len(parts))
-	}
-	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+func (c *Client) verifyIDToken(ctx context.Context, provider *oidc.Provider, rawIDToken string) (*oidc.IDToken, *IDTokenClaims, error) {
+	verifier := provider.VerifierContext(ctx, &oidc.Config{
+		ClientID: c.config.ClientID,
+	})
+	idToken, err := verifier.Verify(ctx, rawIDToken)
 	if err != nil {
-		return fmt.Errorf("failed to decode JWT payload: %w", err)
+		return nil, nil, err
 	}
-	return json.Unmarshal(payload, v)
+
+	var claims IDTokenClaims
+	if err := idToken.Claims(&claims); err != nil {
+		return nil, nil, fmt.Errorf("failed to decode ID token claims: %w", err)
+	}
+	return idToken, &claims, nil
+}
+
+func validateMaxAge(maxAge *int, authTime int64) error {
+	if maxAge == nil {
+		return nil
+	}
+	if authTime == 0 {
+		return fmt.Errorf("auth_time is required when max_age is specified")
+	}
+	if authTime+int64(*maxAge) < time.Now().Unix() {
+		return fmt.Errorf("auth_time exceeds max_age")
+	}
+	return nil
+}
+
+func validatePromptValues(prompts []string) error {
+	if len(prompts) <= 1 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(prompts))
+	for _, prompt := range prompts {
+		seen[prompt] = struct{}{}
+	}
+	if _, ok := seen[PromptNone]; ok && len(seen) > 1 {
+		return fmt.Errorf("prompt=none cannot be combined with other prompt values")
+	}
+	return nil
+}
+
+func httpClientFromContext(ctx context.Context) *http.Client {
+	if ctx != nil {
+		if client, ok := ctx.Value(oauth2.HTTPClient).(*http.Client); ok && client != nil {
+			return client
+		}
+	}
+	return http.DefaultClient
 }
 
 func parseTokenAuthorizationDetails(raw []any) []AuthorizationDetail {

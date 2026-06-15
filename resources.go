@@ -82,10 +82,6 @@ const (
 	ResourceMergedLastNameRuby   = "klon/merged_last_name_ruby"
 	ResourceMergedMaidenNameRuby = "klon/merged_maiden_name_ruby"
 	ResourceMergedFullNameRuby   = "klon/merged_full_name_ruby"
-	ResourceMergedRawName        = "klon/merged_raw_name"
-	ResourceMergedRawGender      = "klon/merged_raw_gender"
-	ResourceMergedRawAddress     = "klon/merged_raw_address"
-	ResourceMergedRawBirthDate   = "klon/merged_raw_birth_date"
 )
 
 // 連絡先リソース
