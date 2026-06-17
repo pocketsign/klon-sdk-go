@@ -1,0 +1,42 @@
+version: "2"
+linters:
+  enable:
+    - depguard
+    - errcheck
+    - exhaustive
+    - gosec
+    - govet
+    - makezero
+    - nolintlint
+    - staticcheck
+    - testifylint
+    - usetesting
+    - whitespace
+  settings:
+    exhaustive:
+      explicit-exhaustive-switch: true
+    depguard:
+      rules:
+        main:
+          files:
+            - $all
+          deny:
+            - pkg: math/rand$
+              desc: Use math/rand/v2 instead
+  exclusions:
+    generated: lax
+    rules:
+      - path: '(.+)_test\.go'
+        linters:
+          - unused
+          - gosec
+      - linters:
+          - gosec
+        text: 'G120'
+    presets:
+      - std-error-handling
+formatters:
+  exclusions:
+    generated: lax
+issues:
+  max-same-issues: 50
