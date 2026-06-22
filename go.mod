@@ -1,6 +1,6 @@
 module github.com/pocketsign/klon-sdk-go
 
-go 1.26.3
+go 1.25.0
 
 require (
 	github.com/coreos/go-oidc/v3 v3.17.0
