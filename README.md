@@ -1,18 +1,11 @@
-# github.com/pocketsign/klon/sdk/go
+# github.com/pocketsign/klon-sdk-go
 
 KLON IdP と連携するための Go SDK。[go-oidc](https://github.com/coreos/go-oidc) と [golang.org/x/oauth2](https://pkg.go.dev/golang.org/x/oauth2) をベースに、KLON 固有のパラメータ (ACR, Authorization Details, Scope) をサポートする。
 
 ## インストール
 
 ```bash
-go env -w GOPRIVATE=github.com/pocketsign/*
-go get github.com/pocketsign/klon/sdk/go
-```
-
-モノレポ内で開発する場合は `replace` ディレクティブを使用する:
-
-```go
-replace github.com/pocketsign/klon/sdk/go => ../../sdk/go
+go get github.com/pocketsign/klon-sdk-go
 ```
 
 ## クイックスタート
@@ -26,9 +19,8 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"net/http"
 
-	klon "github.com/pocketsign/klon/sdk/go"
+	klon "github.com/pocketsign/klon-sdk-go"
 )
 
 func main() {
@@ -255,4 +247,4 @@ klon.ResourceEmailAddress    // "klon/email_address"
 
 ## 動作環境
 
-- Go 1.22 以降
+- Go 1.25 以降
