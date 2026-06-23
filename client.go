@@ -15,13 +15,15 @@ import (
 	"golang.org/x/oauth2"
 )
 
+// ClientConfig は [Client] の生成に必要な設定を保持する。
 type ClientConfig struct {
-	Issuer       string
-	ClientID     string
+	Issuer       string // OIDC Issuer URL。
+	ClientID     string // クライアント ID。
 	ClientSecret string // Confidential Client の場合に指定。空文字列 = Public Client。
-	RedirectURI  string
+	RedirectURI  string // 認可レスポンスのリダイレクト先 URI。
 }
 
+// AuthorizeOptions は [Client.CreateAuthorizationURL] の認可リクエストパラメータを指定する。
 type AuthorizeOptions struct {
 	Scopes                []string                   // デフォルト: ["openid"]
 	AuthorizationDetails  []AuthorizationDetailInput // RFC 9396 Rich Authorization Requests
@@ -42,6 +44,7 @@ type AuthorizationSession struct {
 	MaxAge       *int   `json:"max_age,omitempty"`
 }
 
+// TokenSet はトークンエンドポイントから取得したトークン群を保持する。
 type TokenSet struct {
 	AccessToken          string
 	TokenType            string // 通常 "Bearer"
@@ -53,12 +56,15 @@ type TokenSet struct {
 	AuthorizationDetails []AuthorizationDetail
 }
 
+// Client は KLON IdP と連携する OIDC クライアント。
+// OIDC discovery の結果は内部でキャッシュされ、複数の goroutine から安全に利用できる。
 type Client struct {
 	config   ClientConfig
 	mu       sync.Mutex
 	provider *oidc.Provider
 }
 
+// NewClient は指定した設定で [Client] を生成する。
 func NewClient(config ClientConfig) *Client {
 	return &Client{config: config}
 }

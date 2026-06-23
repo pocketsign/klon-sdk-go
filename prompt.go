@@ -1,14 +1,18 @@
 package klon
 
+// KLON がサポートする prompt は none/login/consent のみ。
 const (
-	// 認証・認可画面を表示しない。必要な場合はエラー応答をコールバックする。
+	// PromptNone は認証・認可画面を表示しない。必要な場合はエラー応答をコールバックする。
 	PromptNone = "none"
-	// エンドユーザーに再認証を要求する
+	// PromptLogin はエンドユーザーに再認証を要求する。
+	// 必ずしもログアウトを意味せず、既存セッションを維持したまま再認証のみ行う。
 	PromptLogin = "login"
-	// エンドユーザーに明示的な同意を要求する
+	// PromptConsent はエンドユーザーに明示的な同意を要求する。
+	// 同意が再利用可能な場合でも同意画面を表示する。
 	PromptConsent = "consent"
 )
 
+// AllPrompts は SDK が定義する全 prompt 値の一覧。
 var AllPrompts = []string{
 	PromptNone,
 	PromptLogin,

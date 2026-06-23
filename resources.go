@@ -95,6 +95,15 @@ const (
 	ResourceFaceImage = "klon/face_image"
 )
 
+// 実行リソース (端末機能の利用やプッシュ通知送信などの権限)
+const (
+	ResourcePushNotification               = "klon/push_notification"
+	ResourceAccessCamera                   = "klon/access_camera"
+	ResourceGetCurrentPosition             = "klon/get_current_position"
+	ResourceGetHighAccuracyCurrentPosition = "klon/get_high_accuracy_current_position"
+	ResourceAccessFitnessData              = "klon/access_fitness_data"
+)
+
 // 証明書現況確認リソース
 const (
 	ResourceCheckJPKICardDigitalSignatureCertificateRevocation     = "klon/check_jpki_card_digital_signature_certificate_revocation"
