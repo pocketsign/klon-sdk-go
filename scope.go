@@ -1,22 +1,25 @@
 package klon
 
+// profile/email などは表示用ラベルではなく、対応する Registry リソースの
+// 読み取り権限要求として扱われる。
 const (
-	// OpenID Connect
+	// ScopeOpenID は ID トークンの発行を要求するスコープ。
 	ScopeOpenID = "openid"
-	// 氏名/生年月日/性別
+	// ScopeProfile は name/gender/birthdate の読み取りを要求するスコープ。
 	ScopeProfile = "profile"
-	// メールアドレス
+	// ScopeEmail は email/email_verified の読み取りを要求するスコープ。
 	ScopeEmail = "email"
-	// リフレッシュトークン
+	// ScopeOfflineAccess はリフレッシュトークンの発行を要求するスコープ。
 	ScopeOfflineAccess = "offline_access"
-	// 住所
+	// ScopeAddress は住所の読み取りを要求するスコープ。
 	ScopeAddress = "address"
-	// 電話番号
+	// ScopePhone は phone_number/phone_number_verified の読み取りを要求するスコープ。
 	ScopePhone = "phone"
-	// 基本4情報
+	// ScopePersonalInfo は基本 4 情報の読み取りを要求するスコープ。
 	ScopePersonalInfo = "personal_info"
 )
 
+// AllScopes は SDK が定義する全スコープの一覧。
 var AllScopes = []string{
 	ScopeOpenID,
 	ScopeProfile,

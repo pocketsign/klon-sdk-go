@@ -145,7 +145,6 @@ type TokenSet struct {
 | `ACR` | `string` | `acr` | 認証コンテキストクラス | 常に存在 |
 | `AMR` | `[]string` | `amr` | 認証方法 | 常に存在 |
 | `SID` | `string` | `sid` | セッション ID | セッション時 |
-| `UID` | `string` | `uid` | IdP ユーザー ID | RP 設定時 |
 | `JPKIVerified` | `bool` | `jpki_verified` | JPKI 紐づけ状態 | 常に存在 |
 | `Name` | `*string` | `name` | 氏名 | scope: profile |
 | `Gender` | `*string` | `gender` | 性別 | scope: profile |
@@ -235,7 +234,7 @@ klon.ResourceMergedBirthDate // "klon/merged_birth_date"
 klon.ResourceEmailAddress    // "klon/email_address"
 ```
 
-カテゴリ: `ResourceSigning*` (署名用電子証明書), `ResourceTicket*` (券面事項入力補助AP), `ResourceManual*` (手入力), `ResourceMerged*` (最も信頼性が高い値), `ResourceEmailAddress`, `ResourcePhoneNumber`, `ResourceFaceImage`, `ResourceCheckJPKI*` (証明書現況確認)
+カテゴリ: `ResourceSigning*` (署名用電子証明書), `ResourceTicket*` (券面事項入力補助AP), `ResourceManual*` (手入力), `ResourceMerged*` (最も信頼性が高い値), `ResourceEmailAddress`, `ResourcePhoneNumber`, `ResourceFaceImage`, 実行リソース (`ResourcePushNotification`, `ResourceAccessCamera`, `ResourceGetCurrentPosition`, `ResourceGetHighAccuracyCurrentPosition`, `ResourceAccessFitnessData`), `ResourceCheckJPKI*` (証明書現況確認)
 
 ### ResourceAction
 

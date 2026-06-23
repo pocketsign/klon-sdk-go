@@ -6,10 +6,13 @@ import "encoding/json"
 // ExchangeCode() / RefreshToken() の戻り値 TokenSet.IDTokenClaims として取得できる。
 //
 // 常に存在するクレームは値型、scope 依存のオプショナルクレームはポインタ型。
+//
+// 本型に定義されていないクレームを参照する場合は、TokenSet.IDToken (生の JWT) を
+// 本型を埋め込んだ独自の struct にデコードして取得する。
 type IDTokenClaims struct {
 	// Standard OIDC (always present)
 	Issuer   string   `json:"iss"`
-	Subject  string   `json:"sub"`
+	Subject  string   `json:"sub"` // サービスごとの subscription_id が入る。
 	Audience Audience `json:"aud"`
 	IssuedAt int64    `json:"iat"`
 	Expiry   int64    `json:"exp"`
@@ -21,9 +24,8 @@ type IDTokenClaims struct {
 	AMR      []string `json:"amr"`
 	SID      string   `json:"sid,omitempty"`
 
-	// KLON-specific
-	UID          string `json:"uid,omitempty"`
-	JPKIVerified bool   `json:"jpki_verified"`
+	// KLON-specific (always present)
+	JPKIVerified bool `json:"jpki_verified"`
 
 	// Profile (scope: "profile")
 	Name      *string `json:"name,omitempty"`
@@ -46,6 +48,7 @@ type IDTokenClaims struct {
 // OIDC 仕様上 string または []string のどちらも取り得るため、両方の JSON 形式を受け付ける。
 type Audience []string
 
+// UnmarshalJSON は aud クレームを string または []string のどちらの JSON 形式からも復元する。
 func (a *Audience) UnmarshalJSON(data []byte) error {
 	var single string
 	if err := json.Unmarshal(data, &single); err == nil {
@@ -61,6 +64,7 @@ func (a *Audience) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+// MarshalJSON は要素が 1 件の場合は string、それ以外は []string として aud クレームをエンコードする。
 func (a Audience) MarshalJSON() ([]byte, error) {
 	if len(a) == 1 {
 		return json.Marshal(a[0])
