@@ -247,3 +247,9 @@ klon.ResourceEmailAddress    // "klon/email_address"
 ## 動作環境
 
 - Go 1.25 以降
+
+## ライセンス
+
+[Apache License 2.0](LICENSE)
+
+Copyright 2026 PocketSign, Inc.
