@@ -65,23 +65,25 @@ func main() {
 
 ### private_key_jwt
 
-共有シークレットの代わりに、サーバー側で読み込んだ ECDSA P-256 秘密鍵を指定できます。
+共有シークレットの代わりに、標準ライブラリの `crypto.Signer` を指定できます。ECDSA P-256 の `*ecdsa.PrivateKey` と、KMS 等に署名を委譲する実装の両方を利用できます。
 対応する公開鍵を `alg: "ES256"`、`use: "sig"`、同じ `kid` を持つ JWKS として公開し、クライアントの `jwks_uri` に登録してください。秘密鍵は公開 JWKS に含めません。
 
 ```go
-// privateKey は安全な保管先から読み込んだ *ecdsa.PrivateKey (P-256)。
+// signer は *ecdsa.PrivateKey (P-256) または KMS 等の crypto.Signer 実装。
 client := klon.NewClient(klon.ClientConfig{
     Issuer: "https://id.mock.klon.you",
     ClientID: "your-client-id",
     RedirectURI: "http://localhost:8080/callback",
     ClientPrivateKey: &klon.ClientPrivateKey{
-        Key: privateKey,
+        Key: signer,
         KeyID: "your-key-id",
     },
 })
 ```
 
 認可コード交換・リフレッシュ・PAR のたびに、issuer を `aud` とする有効期間60秒の ES256 JWT を生成します。`ClientSecret` と併用するとリクエスト前にエラーになります。鍵設定の検証は最初の操作時に行います。
+
+KMS のアダプターは `Public()` で `*ecdsa.PublicKey` (P-256) を返し、`Sign` で渡された SHA-256 ダイジェストを署名して ASN.1 DER 形式の ECDSA 署名を返してください。SDK が JWT 用の署名形式に変換します。`crypto.Signer` は `context.Context` を受け取らないため、KMS 通信のタイムアウトはアダプター側で管理してください。
 
 ## API
 
