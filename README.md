@@ -63,6 +63,26 @@ func main() {
 }
 ```
 
+### private_key_jwt
+
+共有シークレットの代わりに、サーバー側で読み込んだ ECDSA P-256 秘密鍵を指定できます。
+対応する公開鍵を `alg: "ES256"`、`use: "sig"`、同じ `kid` を持つ JWKS として公開し、クライアントの `jwks_uri` に登録してください。秘密鍵は公開 JWKS に含めません。
+
+```go
+// privateKey は安全な保管先から読み込んだ *ecdsa.PrivateKey (P-256)。
+client := klon.NewClient(klon.ClientConfig{
+    Issuer: "https://id.mock.klon.you",
+    ClientID: "your-client-id",
+    RedirectURI: "http://localhost:8080/callback",
+    ClientPrivateKey: &klon.ClientPrivateKey{
+        Key: privateKey,
+        KeyID: "your-key-id",
+    },
+})
+```
+
+認可コード交換・リフレッシュ・PAR のたびに、issuer を `aud` とする有効期間60秒の ES256 JWT を生成します。`ClientSecret` と併用するとリクエスト前にエラーになります。鍵設定の検証は最初の操作時に行います。
+
 ## API
 
 ### OIDC クライアント
@@ -73,7 +93,8 @@ func main() {
 type ClientConfig struct {
 	Issuer       string // OIDC Issuer URL
 	ClientID     string
-	ClientSecret string // Confidential Client の場合に指定。空文字列 = Public Client。
+	ClientSecret string // ClientPrivateKey と併用不可。両方未指定なら Public Client。
+	ClientPrivateKey *ClientPrivateKey // private_key_jwt 認証
 	RedirectURI  string
 }
 ```

@@ -17,10 +17,11 @@ import (
 
 // ClientConfig は [Client] の生成に必要な設定を保持する。
 type ClientConfig struct {
-	Issuer       string // OIDC Issuer URL。
-	ClientID     string // クライアント ID。
-	ClientSecret string // Confidential Client の場合に指定。空文字列 = Public Client。
-	RedirectURI  string // 認可レスポンスのリダイレクト先 URI。
+	Issuer           string            // OIDC Issuer URL。
+	ClientID         string            // クライアント ID。
+	ClientSecret     string            // 共有シークレット認証。ClientPrivateKey と併用不可。
+	ClientPrivateKey *ClientPrivateKey // private_key_jwt 認証。認証情報が両方未指定なら Public Client。
+	RedirectURI      string            // 認可レスポンスのリダイレクト先 URI。
 }
 
 // AuthorizeOptions は [Client.CreateAuthorizationURL] の認可リクエストパラメータを指定する。
@@ -70,6 +71,9 @@ func NewClient(config ClientConfig) *Client {
 }
 
 func (c *Client) discover(ctx context.Context) (*oidc.Provider, error) {
+	if err := c.validateClientAuthentication(); err != nil {
+		return nil, err
+	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -231,9 +235,15 @@ func (c *Client) ExchangeCode(ctx context.Context, code string, state string, se
 		TokenURL: endpoint.TokenURL,
 	}
 
-	token, err := cfg.Exchange(ctx, code,
-		oauth2.VerifierOption(session.CodeVerifier),
-	)
+	var token *oauth2.Token
+	if c.config.ClientPrivateKey != nil {
+		token, err = c.privateKeyTokenRequest(ctx, endpoint.TokenURL, url.Values{
+			"grant_type": {"authorization_code"}, "code": {code},
+			"redirect_uri": {session.RedirectURI}, "code_verifier": {session.CodeVerifier},
+		})
+	} else {
+		token, err = cfg.Exchange(ctx, code, oauth2.VerifierOption(session.CodeVerifier))
+	}
 	if err != nil {
 		return nil, fmt.Errorf("token exchange failed: %w", err)
 	}
@@ -300,11 +310,14 @@ func (c *Client) RefreshToken(ctx context.Context, refreshToken string) (*TokenS
 		TokenURL: endpoint.TokenURL,
 	}
 
-	tokenSource := cfg.TokenSource(ctx, &oauth2.Token{
-		RefreshToken: refreshToken,
-	})
-
-	token, err := tokenSource.Token()
+	var token *oauth2.Token
+	if c.config.ClientPrivateKey != nil {
+		token, err = c.privateKeyTokenRequest(ctx, endpoint.TokenURL, url.Values{
+			"grant_type": {"refresh_token"}, "refresh_token": {refreshToken},
+		})
+	} else {
+		token, err = cfg.TokenSource(ctx, &oauth2.Token{RefreshToken: refreshToken}).Token()
+	}
 	if err != nil {
 		return nil, fmt.Errorf("token refresh failed: %w", err)
 	}
@@ -350,7 +363,11 @@ func (c *Client) pushedAuthorizationRequest(
 ) (string, error) {
 	form := url.Values{}
 	form.Set("client_id", c.config.ClientID)
-	if c.config.ClientSecret != "" {
+	if c.config.ClientPrivateKey != nil {
+		if err := c.setClientAssertion(form); err != nil {
+			return "", err
+		}
+	} else if c.config.ClientSecret != "" {
 		form.Set("client_secret", c.config.ClientSecret)
 	}
 	form.Set("response_type", "code")
