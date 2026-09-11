@@ -1,9 +1,12 @@
 package klon
 
 import (
+	"crypto"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -18,8 +21,35 @@ import (
 )
 
 func TestClient_PrivateKeyJWT(t *testing.T) {
+	t.Run("local private key", func(t *testing.T) { testClientPrivateKeyJWT(t, false) })
+	t.Run("external signer", func(t *testing.T) { testClientPrivateKeyJWT(t, true) })
+}
+
+// externalTestSigner exposes only the standard signing interface to the SDK.
+type externalTestSigner struct {
+	publicKey crypto.PublicKey
+	sign      func(io.Reader, []byte, crypto.SignerOpts) ([]byte, error)
+}
+
+func (s externalTestSigner) Public() crypto.PublicKey { return s.publicKey }
+func (s externalTestSigner) Sign(random io.Reader, digest []byte, opts crypto.SignerOpts) ([]byte, error) {
+	return s.sign(random, digest, opts)
+}
+
+func testClientPrivateKeyJWT(t *testing.T, external bool) {
+	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	require.NoError(t, err)
+	var signingKey crypto.Signer = key
+	signCalls := 0
+	if external {
+		signingKey = externalTestSigner{publicKey: key.Public(), sign: func(random io.Reader, digest []byte, opts crypto.SignerOpts) ([]byte, error) {
+			require.Equal(t, crypto.SHA256, opts.HashFunc())
+			require.Len(t, digest, 32)
+			signCalls++
+			return key.Sign(random, digest, opts)
+		}}
+	}
 	var assertions []jwt.Claims
 	var paths []string
 	server, _ := testOIDCServerWithOptions(t, testOIDCServerOptions{
@@ -41,7 +71,7 @@ func TestClient_PrivateKeyJWT(t *testing.T) {
 		},
 	})
 	client := NewClient(ClientConfig{Issuer: server.URL, ClientID: "test-client",
-		RedirectURI: "http://localhost/callback", ClientPrivateKey: &ClientPrivateKey{Key: key, KeyID: "client-key"}})
+		RedirectURI: "http://localhost/callback", ClientPrivateKey: &ClientPrivateKey{Key: signingKey, KeyID: "client-key"}})
 	_, session, err := client.CreateAuthorizationURL(t.Context(), AuthorizeOptions{UsePAR: true})
 	require.NoError(t, err)
 	session.Nonce = "test-nonce"
@@ -56,6 +86,9 @@ func TestClient_PrivateKeyJWT(t *testing.T) {
 		require.NotNil(t, tokens.IDTokenClaims)
 	}
 	require.Equal(t, []string{"/par", "/token", "/token", "/token"}, paths)
+	if external {
+		require.Equal(t, 4, signCalls)
+	}
 	ids := map[string]bool{}
 	for _, claims := range assertions {
 		require.Equal(t, jwt.Audience{server.URL}, claims.Audience)
@@ -125,8 +158,11 @@ func TestClient_InvalidPrivateKeyConfig(t *testing.T) {
 	for _, config := range []ClientConfig{
 		{ClientSecret: "secret", ClientPrivateKey: &ClientPrivateKey{Key: key, KeyID: "key"}},
 		{ClientPrivateKey: &ClientPrivateKey{KeyID: "key"}},
+		{ClientPrivateKey: &ClientPrivateKey{Key: (*ecdsa.PrivateKey)(nil), KeyID: "key"}},
 		{ClientPrivateKey: &ClientPrivateKey{Key: key}},
 		{ClientPrivateKey: &ClientPrivateKey{Key: wrongCurve, KeyID: "key"}},
+		{ClientPrivateKey: &ClientPrivateKey{Key: externalTestSigner{}, KeyID: "key"}},
+		{ClientPrivateKey: &ClientPrivateKey{Key: externalTestSigner{publicKey: (*ecdsa.PublicKey)(nil)}, KeyID: "key"}},
 	} {
 		client := NewClient(config)
 		_, _, err := client.CreateAuthorizationURL(t.Context())
@@ -134,4 +170,18 @@ func TestClient_InvalidPrivateKeyConfig(t *testing.T) {
 		_, err = client.RefreshToken(t.Context(), "refresh")
 		require.ErrorContains(t, err, "ClientPrivateKey")
 	}
+}
+
+func TestClient_SignerError(t *testing.T) {
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+	signErr := errors.New("KMS signing unavailable")
+	client := NewClient(ClientConfig{ClientPrivateKey: &ClientPrivateKey{
+		KeyID: "key",
+		Key: externalTestSigner{publicKey: key.Public(), sign: func(io.Reader, []byte, crypto.SignerOpts) ([]byte, error) {
+			return nil, signErr
+		}},
+	}})
+	_, err = client.privateKeyTokenRequest(t.Context(), "https://example.com/token", url.Values{})
+	require.ErrorIs(t, err, signErr)
 }

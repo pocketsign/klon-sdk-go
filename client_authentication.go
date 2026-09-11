@@ -2,6 +2,7 @@ package klon
 
 import (
 	"context"
+	"crypto"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"encoding/json"
@@ -13,14 +14,19 @@ import (
 	"time"
 
 	"github.com/go-jose/go-jose/v4"
+	"github.com/go-jose/go-jose/v4/cryptosigner"
 	"github.com/go-jose/go-jose/v4/jwt"
 	"golang.org/x/oauth2"
 )
 
-// ClientPrivateKey は private_key_jwt 用の秘密鍵と登録した公開 JWKS の kid。
-// サーバー側でのみ使用する。Key は ECDSA P-256 鍵である必要がある。
+// ClientPrivateKey は private_key_jwt 用の署名器と登録した公開 JWKS の kid。
+// サーバー側でのみ使用する。
 type ClientPrivateKey struct {
-	Key   *ecdsa.PrivateKey
+	// Key は *ecdsa.PrivateKey または KMS 等の crypto.Signer 実装。
+	// Public は ECDSA P-256 公開鍵を返し、Sign は SHA-256 ダイジェストを
+	// 署名して ASN.1 DER 形式の ECDSA 署名を返す必要がある。
+	// crypto.Signer は Context を受け取らないため、通信のタイムアウトは実装側で管理する。
+	Key   crypto.Signer
 	KeyID string
 }
 
@@ -32,7 +38,15 @@ func (c *Client) validateClientAuthentication() error {
 	if c.config.ClientSecret != "" {
 		return fmt.Errorf("ClientSecret and ClientPrivateKey cannot be configured together")
 	}
-	if key.Key == nil || key.Key.Curve != elliptic.P256() || strings.TrimSpace(key.KeyID) == "" {
+	if key.Key == nil || strings.TrimSpace(key.KeyID) == "" {
+		return fmt.Errorf("ClientPrivateKey requires an ECDSA P-256 key and a non-empty KeyID")
+	}
+	// Preserve nil private-key validation after wrapping the key in an interface.
+	if privateKey, ok := key.Key.(*ecdsa.PrivateKey); ok && privateKey == nil {
+		return fmt.Errorf("ClientPrivateKey requires an ECDSA P-256 key and a non-empty KeyID")
+	}
+	publicKey, ok := key.Key.Public().(*ecdsa.PublicKey)
+	if !ok || publicKey == nil || publicKey.Curve != elliptic.P256() {
 		return fmt.Errorf("ClientPrivateKey requires an ECDSA P-256 key and a non-empty KeyID")
 	}
 	return nil
@@ -40,7 +54,7 @@ func (c *Client) validateClientAuthentication() error {
 
 func (c *Client) setClientAssertion(form url.Values) error {
 	key := c.config.ClientPrivateKey
-	signer, err := jose.NewSigner(jose.SigningKey{Algorithm: jose.ES256, Key: key.Key},
+	signer, err := jose.NewSigner(jose.SigningKey{Algorithm: jose.ES256, Key: cryptosigner.Opaque(key.Key)},
 		(&jose.SignerOptions{}).WithHeader(jose.HeaderKey("kid"), key.KeyID))
 	if err != nil {
 		return fmt.Errorf("failed to create client assertion signer: %w", err)

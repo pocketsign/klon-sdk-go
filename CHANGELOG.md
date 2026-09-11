@@ -4,7 +4,7 @@
 
 ## Unreleased
 
-- `ClientPrivateKey` による private_key_jwt（ES256）認証を追加しました。認可コード交換・トークン更新・PAR に対応します。
+- `ClientPrivateKey` による private_key_jwt（ES256）認証を追加しました。認可コード交換・トークン更新・PAR に対応します。鍵は標準の `crypto.Signer` で指定でき、ローカルの ECDSA P-256 秘密鍵と KMS 等の署名実装を利用できます。
 
 - `github.com/pocketsign/klon-sdk-go` の最初のリリースです。[go-oidc](https://github.com/coreos/go-oidc) と [golang.org/x/oauth2](https://pkg.go.dev/golang.org/x/oauth2) をベースに、KLON IdP との OIDC 連携を実装するための機能を提供します。
   - `NewClient` / `Client`: 認可 URL の生成、認可コードの交換、トークンの更新を行います。PKCE、nonce、ID トークン、`auth_time` の検証を含みます。
