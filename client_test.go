@@ -21,6 +21,7 @@ type testOIDCServerOptions struct {
 	authTimeOffset         time.Duration
 	refreshIDTokenOverride string
 	requirePARCustomHeader bool
+	checkClientAuth        func(*http.Request)
 }
 
 // testOIDCServer creates a mock OIDC server with discovery, JWKS, token, and PAR endpoints.
@@ -64,6 +65,9 @@ func testOIDCServerWithOptions(t *testing.T, opts testOIDCServerOptions) (*httpt
 
 	mux.HandleFunc("/token", func(w http.ResponseWriter, r *http.Request) {
 		_ = r.ParseForm()
+		if opts.checkClientAuth != nil {
+			opts.checkClientAuth(r)
+		}
 
 		nonce := r.Form.Get("nonce")
 
@@ -128,6 +132,10 @@ func testOIDCServerWithOptions(t *testing.T, opts testOIDCServerOptions) (*httpt
 	})
 
 	mux.HandleFunc("/par", func(w http.ResponseWriter, r *http.Request) {
+		if opts.checkClientAuth != nil {
+			_ = r.ParseForm()
+			opts.checkClientAuth(r)
+		}
 		if opts.requirePARCustomHeader && r.Header.Get("X-Test-HTTP-Client") != "1" {
 			http.Error(w, "missing custom HTTP client", http.StatusTeapot)
 			return
