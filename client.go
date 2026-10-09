@@ -9,7 +9,6 @@ import (
 	"net/url"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/coreos/go-oidc/v3/oidc"
 	"golang.org/x/oauth2"
@@ -42,7 +41,6 @@ type AuthorizationSession struct {
 	Nonce        string `json:"nonce"`
 	CodeVerifier string `json:"code_verifier"`
 	RedirectURI  string `json:"redirect_uri"`
-	MaxAge       *int   `json:"max_age,omitempty"`
 }
 
 // TokenSet はトークンエンドポイントから取得したトークン群を保持する。
@@ -202,10 +200,6 @@ func (c *Client) CreateAuthorizationURL(ctx context.Context, opts ...AuthorizeOp
 		CodeVerifier: codeVerifier,
 		RedirectURI:  c.config.RedirectURI,
 	}
-	if opt.MaxAge != nil {
-		maxAge := *opt.MaxAge
-		session.MaxAge = &maxAge
-	}
 
 	return authURL, session, nil
 }
@@ -260,10 +254,6 @@ func (c *Client) ExchangeCode(ctx context.Context, code string, state string, se
 
 	if idToken.Nonce != session.Nonce {
 		return nil, fmt.Errorf("nonce mismatch: expected %q, got %q", session.Nonce, idToken.Nonce)
-	}
-
-	if err := validateMaxAge(session.MaxAge, claims.AuthTime); err != nil {
-		return nil, err
 	}
 
 	tokenSet := &TokenSet{
@@ -454,19 +444,6 @@ func (c *Client) verifyIDToken(ctx context.Context, provider *oidc.Provider, raw
 		return nil, nil, fmt.Errorf("failed to decode ID token claims: %w", err)
 	}
 	return idToken, &claims, nil
-}
-
-func validateMaxAge(maxAge *int, authTime int64) error {
-	if maxAge == nil {
-		return nil
-	}
-	if authTime == 0 {
-		return fmt.Errorf("auth_time is required when max_age is specified")
-	}
-	if authTime+int64(*maxAge) < time.Now().Unix() {
-		return fmt.Errorf("auth_time exceeds max_age")
-	}
-	return nil
 }
 
 func validatePromptValues(prompts []string) error {

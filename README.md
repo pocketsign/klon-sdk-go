@@ -117,7 +117,7 @@ type AuthorizeOptions struct {
 }
 ```
 
-`MaxAge` を指定した場合、値は `AuthorizationSession` に保存され、`ExchangeCode` 時に ID Token の `auth_time` が検証される。
+`MaxAge` は認可リクエストの `max_age` パラメータとして送られ、IdP が認可リクエストの時点で再認証が必要かを判定する。`ExchangeCode` は `auth_time` の経過時間を検証しない。認証からの経過時間で制限したい場合は、`TokenSet.IDTokenClaims.AuthTime` を使ってアプリ側で判定すること。
 PAR を使う場合も、`oidc.ClientContext` / `oauth2.HTTPClient` で `ctx` に設定した HTTP client が使用される。
 
 #### `Client.ExchangeCode(ctx, code, state string, session *AuthorizationSession) (*TokenSet, error)`
@@ -257,7 +257,7 @@ klon.ResourceMergedBirthDate // "klon/merged_birth_date"
 klon.ResourceEmailAddress    // "klon/email_address"
 ```
 
-カテゴリ: `ResourceSigning*` (署名用電子証明書), `ResourceTicket*` (券面事項入力補助AP), `ResourceManual*` (手入力), `ResourceMerged*` (最も信頼性が高い値), `ResourceEmailAddress`, `ResourcePhoneNumber`, `ResourceFaceImage`, 実行リソース (`ResourcePushNotification`, `ResourceAccessCamera`, `ResourceGetCurrentPosition`, `ResourceGetHighAccuracyCurrentPosition`, `ResourceAccessFitnessData`), `ResourceCheckJPKI*` (証明書現況確認)
+カテゴリ: `ResourceSigning*` (署名用電子証明書), `ResourceTicket*` (券面事項入力補助AP), `ResourceManual*` (手入力), `ResourceMerged*` (最も信頼性が高い値), `ResourceEmailAddress`, `ResourcePhoneNumber`, `ResourceFaceImage`, 実行リソース (`ResourcePushNotification`, `ResourceAccessCamera`, `ResourceGetCurrentPosition`, `ResourceGetHighAccuracyCurrentPosition`, `ResourceAccessFitnessData`), `ResourceCheckJPKI*` (証明書現況確認), `ResourceCheckResidencyContinuity` (居住継続性判定)
 
 ### ResourceAction
 

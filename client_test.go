@@ -213,8 +213,7 @@ func TestClient_Authorize(t *testing.T) {
 		require.Equal(t, "300", q.Get("max_age"))
 		require.NotEmpty(t, q.Get("authorization_details"))
 		require.Equal(t, "create", q.Get("grant_management_action"))
-		require.NotNil(t, session.MaxAge)
-		require.Equal(t, 300, *session.MaxAge)
+		require.NotEmpty(t, session.State)
 	})
 
 	t.Run("PAR generates URL with request_uri", func(t *testing.T) {
@@ -315,30 +314,11 @@ func TestClient_ExchangeCode(t *testing.T) {
 		require.ErrorContains(t, err, "nonce mismatch")
 	})
 
-	t.Run("max_age 指定時は auth_time を検証する", func(t *testing.T) {
+	t.Run("max_age を指定しても auth_time の経過時間では弾かない", func(t *testing.T) {
+		// max_age は IdP が認可リクエスト時に判定するパラメータで、RP 側の鮮度判定はアプリの方針に任せる
 		server, _ := testOIDCServerWithOptions(t, testOIDCServerOptions{
 			authTimeOffset: -2 * time.Minute,
 		})
-		client := NewClient(ClientConfig{
-			Issuer:       server.URL,
-			ClientID:     "test-client",
-			ClientSecret: "test-secret",
-			RedirectURI:  "http://localhost/callback",
-		})
-		maxAge := 60
-		_, session, err := client.CreateAuthorizationURL(t.Context(), AuthorizeOptions{
-			MaxAge: &maxAge,
-		})
-		require.NoError(t, err)
-		session.Nonce = "test-nonce"
-
-		_, err = client.ExchangeCode(t.Context(), "test-code", session.State, session)
-
-		require.ErrorContains(t, err, "auth_time")
-	})
-
-	t.Run("max_age が 0 でも直近の auth_time なら成功する", func(t *testing.T) {
-		server, _ := testOIDCServer(t)
 		client := NewClient(ClientConfig{
 			Issuer:       server.URL,
 			ClientID:     "test-client",
@@ -355,7 +335,7 @@ func TestClient_ExchangeCode(t *testing.T) {
 		tokenSet, err := client.ExchangeCode(t.Context(), "test-code", session.State, session)
 
 		require.NoError(t, err)
-		require.NotNil(t, tokenSet)
+		require.InDelta(t, time.Now().Add(-2*time.Minute).Unix(), tokenSet.IDTokenClaims.AuthTime, 5, "auth_time はアプリが判定できるよう返す")
 	})
 }
 

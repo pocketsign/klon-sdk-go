@@ -111,3 +111,9 @@ const (
 	ResourceCheckJPKIMobileDigitalSignatureCertificateRevocation   = "klon/check_jpki_mobile_digital_signature_certificate_revocation"
 	ResourceCheckJPKIMobileUserAuthenticationCertificateRevocation = "klon/check_jpki_mobile_user_authentication_certificate_revocation"
 )
+
+// 居住継続性判定リソース
+const (
+	// ResourceCheckResidencyContinuity サービスが指定する市区町村に住んでいるかどうかを、サービスが継続的に確認するための権限
+	ResourceCheckResidencyContinuity = "klon/check_residency_continuity"
+)
