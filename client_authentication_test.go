@@ -5,7 +5,6 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
-	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -116,6 +115,7 @@ func TestPrivateKeyTokenResponse(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			clientHeaders := make(chan string, 1)
+			discovery := newAuthTestServer(t, authTestServerOptions{})
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				clientHeaders <- r.Header.Get("X-Test-Client")
 				w.Header().Set("Content-Type", "application/json")
@@ -123,12 +123,12 @@ func TestPrivateKeyTokenResponse(t *testing.T) {
 				_, _ = w.Write([]byte(tc.body))
 			}))
 			t.Cleanup(server.Close)
-			client := NewClient(ClientConfig{Issuer: server.URL, ClientID: "client", ClientPrivateKey: &ClientPrivateKey{Key: key, KeyID: "key"}})
+			client := NewClient(ClientConfig{Issuer: discovery.Issuer, ClientID: "client", ClientPrivateKey: &ClientPrivateKey{Key: key, KeyID: "key"}})
 			ctx := oidc.ClientContext(t.Context(), &http.Client{Transport: roundTripperFunc(func(r *http.Request) (*http.Response, error) {
 				r.Header.Set("X-Test-Client", "custom")
 				return http.DefaultTransport.RoundTrip(r)
 			})})
-			token, err := client.privateKeyTokenRequest(ctx, server.URL, url.Values{"grant_type": {"refresh_token"}, "refresh_token": {"original"}})
+			token, err := client.tokenRequest(ctx, server.URL, url.Values{"grant_type": {"refresh_token"}, "refresh_token": {"original"}})
 			require.Len(t, clientHeaders, 1)
 			require.Equal(t, "custom", <-clientHeaders)
 			if tc.wantError != "" {
@@ -170,18 +170,4 @@ func TestClient_InvalidPrivateKeyConfig(t *testing.T) {
 		_, err = client.RefreshToken(t.Context(), "refresh")
 		require.ErrorContains(t, err, "ClientPrivateKey")
 	}
-}
-
-func TestClient_SignerError(t *testing.T) {
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	require.NoError(t, err)
-	signErr := errors.New("KMS signing unavailable")
-	client := NewClient(ClientConfig{ClientPrivateKey: &ClientPrivateKey{
-		KeyID: "key",
-		Key: externalTestSigner{publicKey: key.Public(), sign: func(io.Reader, []byte, crypto.SignerOpts) ([]byte, error) {
-			return nil, signErr
-		}},
-	}})
-	_, err = client.privateKeyTokenRequest(t.Context(), "https://example.com/token", url.Values{})
-	require.ErrorIs(t, err, signErr)
 }

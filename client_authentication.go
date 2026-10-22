@@ -30,6 +30,9 @@ type ClientPrivateKey struct {
 	KeyID string
 }
 
+// clientAssertionLifetime はサーバーが許容する最大有効期間 (5 分) より十分短くする。
+const clientAssertionLifetime = time.Minute
+
 func (c *Client) validateClientAuthentication() error {
 	key := c.config.ClientPrivateKey
 	if key == nil {
@@ -52,32 +55,64 @@ func (c *Client) validateClientAuthentication() error {
 	return nil
 }
 
-func (c *Client) setClientAssertion(form url.Values) error {
+// ClientAssertion は private_key_jwt の client_assertion (RFC 7523) を生成する。
+// SDK が対応していない endpoint へクライアント認証付きのリクエストを送る場合に使う。
+// aud は Issuer Identifier (RFC 7523bis)、有効期間は 60 秒、jti は毎回ランダムに生成する。
+// 署名器が返したエラーは wrap して返すため、errors.As / errors.Is で判別できる。
+// ctx は署名器に渡らない。キャンセル済みの場合のみ署名前にエラーを返す。
+func (c *Client) ClientAssertion(ctx context.Context) (string, error) {
+	if c.config.ClientPrivateKey == nil {
+		return "", fmt.Errorf("ClientAssertion requires ClientPrivateKey")
+	}
+	// discovery で Issuer が IdP の issuer と一致することを確認してから aud に使う。
+	// 結果はキャッシュされるため、通信は初回のみ。
+	if _, err := c.discover(ctx); err != nil {
+		return "", fmt.Errorf("OIDC discovery failed: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 	key := c.config.ClientPrivateKey
 	signer, err := jose.NewSigner(jose.SigningKey{Algorithm: jose.ES256, Key: cryptosigner.Opaque(key.Key)},
 		(&jose.SignerOptions{}).WithHeader(jose.HeaderKey("kid"), key.KeyID))
 	if err != nil {
-		return fmt.Errorf("failed to create client assertion signer: %w", err)
+		return "", fmt.Errorf("failed to create client assertion signer: %w", err)
 	}
 	now := time.Now()
 	assertion, err := jwt.Signed(signer).Claims(jwt.Claims{
 		Issuer: c.config.ClientID, Subject: c.config.ClientID,
 		Audience: jwt.Audience{c.config.Issuer},
-		IssuedAt: jwt.NewNumericDate(now), Expiry: jwt.NewNumericDate(now.Add(time.Minute)),
+		IssuedAt: jwt.NewNumericDate(now), Expiry: jwt.NewNumericDate(now.Add(clientAssertionLifetime)),
 		ID: oauth2.GenerateVerifier(),
 	}).Serialize()
 	if err != nil {
-		return fmt.Errorf("failed to sign client assertion: %w", err)
+		return "", fmt.Errorf("failed to sign client assertion: %w", err)
 	}
+	return assertion, nil
+}
+
+// setClientAuthentication は設定された認証方式のクライアント認証パラメータを form に設定する。
+// ClientPrivateKey は private_key_jwt、ClientSecret は client_secret_post、いずれもなければ client_id のみを送る。
+func (c *Client) setClientAuthentication(ctx context.Context, form url.Values) error {
 	form.Set("client_id", c.config.ClientID)
-	form.Set("client_assertion_type", "urn:ietf:params:oauth:client-assertion-type:jwt-bearer")
-	form.Set("client_assertion", assertion)
+	switch {
+	case c.config.ClientPrivateKey != nil:
+		assertion, err := c.ClientAssertion(ctx)
+		if err != nil {
+			return err
+		}
+		form.Set("client_assertion_type", "urn:ietf:params:oauth:client-assertion-type:jwt-bearer")
+		form.Set("client_assertion", assertion)
+	case c.config.ClientSecret != "":
+		form.Set("client_secret", c.config.ClientSecret)
+	}
 	return nil
 }
 
-// privateKeyTokenRequest handles the authentication method not supported by oauth2.Config.
-func (c *Client) privateKeyTokenRequest(ctx context.Context, endpoint string, form url.Values) (*oauth2.Token, error) {
-	if err := c.setClientAssertion(form); err != nil {
+// tokenRequest sends a token request with form-based client authentication.
+// oauth2.Config does not support private_key_jwt, so this is used for it and for grants the SDK sends itself.
+func (c *Client) tokenRequest(ctx context.Context, endpoint string, form url.Values) (*oauth2.Token, error) {
+	if err := c.setClientAuthentication(ctx, form); err != nil {
 		return nil, err
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, strings.NewReader(form.Encode()))

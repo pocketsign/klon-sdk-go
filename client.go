@@ -32,6 +32,10 @@ type AuthorizeOptions struct {
 	MaxAge                *int // 認証の最大経過時間 (秒)
 	GrantManagementAction GrantManagementAction
 	UsePAR                bool // RFC 9126 Pushed Authorization Requests
+	// ExtraParams は認可リクエストに追加する任意のパラメータ。
+	// 認可 URL と PAR のどちらでも同じ値を送る。
+	// SDK が管理するパラメータ (state・nonce・PKCE など) や、上のフィールドで指定するパラメータは指定できない (エラーになる)。
+	ExtraParams map[string]string
 }
 
 // AuthorizationSession は認可コード交換に必要なフロー状態を保持する。
@@ -107,6 +111,10 @@ func (c *Client) CreateAuthorizationURL(ctx context.Context, opts ...AuthorizeOp
 	if err := validatePromptValues(opt.Prompt); err != nil {
 		return nil, nil, err
 	}
+	requestParams, err := buildAuthorizeRequestParams(opt)
+	if err != nil {
+		return nil, nil, err
+	}
 
 	provider, err := c.discover(ctx)
 	if err != nil {
@@ -123,17 +131,6 @@ func (c *Client) CreateAuthorizationURL(ctx context.Context, opts ...AuthorizeOp
 		scopes = []string{"openid"}
 	}
 	cfg := c.oauth2Config(scopes)
-
-	var adJSON string
-	if len(opt.AuthorizationDetails) > 0 {
-		var err error
-		adJSON, err = BuildAuthorizationDetails(opt.AuthorizationDetails)
-		if err != nil {
-			return nil, nil, fmt.Errorf("failed to build authorization_details: %w", err)
-		}
-	}
-	acrValues := strings.Join(opt.AcrValues, " ")
-	prompt := BuildPrompt(opt.Prompt...)
 
 	var endpoint struct {
 		AuthURL  string `json:"authorization_endpoint"`
@@ -152,21 +149,8 @@ func (c *Client) CreateAuthorizationURL(ctx context.Context, opts ...AuthorizeOp
 		oauth2.S256ChallengeOption(codeVerifier),
 		oauth2.SetAuthURLParam("nonce", nonce),
 	}
-
-	if adJSON != "" {
-		authCodeOpts = append(authCodeOpts, oauth2.SetAuthURLParam("authorization_details", adJSON))
-	}
-	if acrValues != "" {
-		authCodeOpts = append(authCodeOpts, oauth2.SetAuthURLParam("acr_values", acrValues))
-	}
-	if prompt != "" {
-		authCodeOpts = append(authCodeOpts, oauth2.SetAuthURLParam("prompt", prompt))
-	}
-	if opt.MaxAge != nil {
-		authCodeOpts = append(authCodeOpts, oauth2.SetAuthURLParam("max_age", fmt.Sprintf("%d", *opt.MaxAge)))
-	}
-	if opt.GrantManagementAction != "" {
-		authCodeOpts = append(authCodeOpts, oauth2.SetAuthURLParam("grant_management_action", string(opt.GrantManagementAction)))
+	for key, values := range requestParams {
+		authCodeOpts = append(authCodeOpts, oauth2.SetAuthURLParam(key, values[0]))
 	}
 
 	var authURL *url.URL
@@ -174,7 +158,7 @@ func (c *Client) CreateAuthorizationURL(ctx context.Context, opts ...AuthorizeOp
 		if endpoint.PARURL == "" {
 			return nil, nil, fmt.Errorf("authorization server does not expose a pushed_authorization_request_endpoint")
 		}
-		requestURI, err := c.pushedAuthorizationRequest(ctx, endpoint.PARURL, state, codeVerifier, nonce, opt)
+		requestURI, err := c.pushedAuthorizationRequest(ctx, endpoint.PARURL, state, codeVerifier, nonce, opt.Scopes, requestParams)
 		if err != nil {
 			return nil, nil, fmt.Errorf("PAR request failed: %w", err)
 		}
@@ -231,7 +215,7 @@ func (c *Client) ExchangeCode(ctx context.Context, code string, state string, se
 
 	var token *oauth2.Token
 	if c.config.ClientPrivateKey != nil {
-		token, err = c.privateKeyTokenRequest(ctx, endpoint.TokenURL, url.Values{
+		token, err = c.tokenRequest(ctx, endpoint.TokenURL, url.Values{
 			"grant_type": {"authorization_code"}, "code": {code},
 			"redirect_uri": {session.RedirectURI}, "code_verifier": {session.CodeVerifier},
 		})
@@ -302,7 +286,7 @@ func (c *Client) RefreshToken(ctx context.Context, refreshToken string) (*TokenS
 
 	var token *oauth2.Token
 	if c.config.ClientPrivateKey != nil {
-		token, err = c.privateKeyTokenRequest(ctx, endpoint.TokenURL, url.Values{
+		token, err = c.tokenRequest(ctx, endpoint.TokenURL, url.Values{
 			"grant_type": {"refresh_token"}, "refresh_token": {refreshToken},
 		})
 	} else {
@@ -349,16 +333,12 @@ func (c *Client) pushedAuthorizationRequest(
 	state string,
 	codeVerifier string,
 	nonce string,
-	opt AuthorizeOptions,
+	scopes []string,
+	requestParams url.Values,
 ) (string, error) {
 	form := url.Values{}
-	form.Set("client_id", c.config.ClientID)
-	if c.config.ClientPrivateKey != nil {
-		if err := c.setClientAssertion(form); err != nil {
-			return "", err
-		}
-	} else if c.config.ClientSecret != "" {
-		form.Set("client_secret", c.config.ClientSecret)
+	if err := c.setClientAuthentication(ctx, form); err != nil {
+		return "", err
 	}
 	form.Set("response_type", "code")
 	form.Set("redirect_uri", c.config.RedirectURI)
@@ -366,31 +346,13 @@ func (c *Client) pushedAuthorizationRequest(
 	form.Set("state", state)
 	form.Set("nonce", nonce)
 
-	scopes := opt.Scopes
 	if len(scopes) == 0 {
 		scopes = []string{"openid"}
 	}
 	form.Set("scope", strings.Join(scopes, " "))
 	form.Set("code_challenge", computeS256Challenge(codeVerifier))
-
-	if len(opt.AuthorizationDetails) > 0 {
-		adJSON, err := BuildAuthorizationDetails(opt.AuthorizationDetails)
-		if err != nil {
-			return "", fmt.Errorf("failed to build authorization_details: %w", err)
-		}
-		form.Set("authorization_details", adJSON)
-	}
-	if len(opt.AcrValues) > 0 {
-		form.Set("acr_values", strings.Join(opt.AcrValues, " "))
-	}
-	if len(opt.Prompt) > 0 {
-		form.Set("prompt", BuildPrompt(opt.Prompt...))
-	}
-	if opt.MaxAge != nil {
-		form.Set("max_age", fmt.Sprintf("%d", *opt.MaxAge))
-	}
-	if opt.GrantManagementAction != "" {
-		form.Set("grant_management_action", string(opt.GrantManagementAction))
+	for key, values := range requestParams {
+		form.Set(key, values[0])
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, parEndpoint, strings.NewReader(form.Encode()))
