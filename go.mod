@@ -1,10 +1,10 @@
 module github.com/pocketsign/klon-sdk-go
 
-go 1.25.0
+go 1.26.10
 
 require (
 	github.com/coreos/go-oidc/v3 v3.17.0
-	github.com/go-jose/go-jose/v4 v4.1.3
+	github.com/go-jose/go-jose/v4 v4.1.6
 	github.com/stretchr/testify v1.11.1
 	golang.org/x/oauth2 v0.36.0
 )

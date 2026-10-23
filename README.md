@@ -81,9 +81,24 @@ client := klon.NewClient(klon.ClientConfig{
 })
 ```
 
-認可コード交換・リフレッシュ・PAR のたびに、issuer を `aud` とする有効期間60秒の ES256 JWT を生成します。`ClientSecret` と併用するとリクエスト前にエラーになります。鍵設定の検証は最初の操作時に行います。
+認可コード交換・リフレッシュ・PAR・トークン失効のたびに、`Issuer`（Issuer Identifier）を `aud` とする有効期間60秒の ES256 JWT を生成します。`ClientSecret` と併用するとリクエスト前にエラーになります。鍵設定の検証は最初の操作時に行います。
 
 KMS のアダプターは `Public()` で `*ecdsa.PublicKey` (P-256) を返し、`Sign` で渡された SHA-256 ダイジェストを署名して ASN.1 DER 形式の ECDSA 署名を返してください。SDK が JWT 用の署名形式に変換します。`crypto.Signer` は `context.Context` を受け取らないため、KMS 通信のタイムアウトはアダプター側で管理してください。
+
+署名器が返したエラーは wrap して返すため、`errors.As` / `errors.Is` で元のエラーを判別できます（例: KMS のレート制限時に予備鍵へ切り替える）。
+
+#### SDK が対応していない endpoint への認証
+
+`Client.ClientAssertion(ctx)` で、SDK と同じ claims（`iss`/`sub` = クライアント ID、`aud` = `Issuer`、有効期間60秒、ランダムな `jti`）の client assertion を取得できます。他のメソッドと同じく OIDC discovery を行い、`Issuer` が IdP の `issuer` と一致しない場合は署名せずにエラーを返します。
+
+```go
+assertion, err := client.ClientAssertion(ctx)
+form := url.Values{
+    "client_id":             {"your-client-id"},
+    "client_assertion_type": {"urn:ietf:params:oauth:client-assertion-type:jwt-bearer"},
+    "client_assertion":      {assertion},
+}
+```
 
 ## API
 
@@ -114,8 +129,19 @@ type AuthorizeOptions struct {
 	MaxAge                *int                       // 認証の最大経過時間 (秒)
 	GrantManagementAction GrantManagementAction
 	UsePAR                bool                       // RFC 9126 Pushed Authorization Requests
+	ExtraParams           map[string]string          // 認可リクエストに追加する任意のパラメータ
 }
 ```
+
+`ExtraParams` は、上のフィールドに無いパラメータを認可リクエストに追加するときに使う。`UsePAR` の有無にかかわらず同じ値を送る（PAR ではリクエストボディに、PAR を使わない場合は認可 URL に入る）。
+
+```go
+authURL, session, err := client.CreateAuthorizationURL(ctx, klon.AuthorizeOptions{
+	ExtraParams: map[string]string{"ui_locales": "ja"},
+})
+```
+
+SDK が値を決めるパラメータ（`client_id`・`response_type`・`redirect_uri`・`scope`・`state`・`nonce`・`code_challenge`・`code_challenge_method`・`request_uri`・`dpop_jkt`、クライアント認証の `client_secret`・`client_assertion`・`client_assertion_type`）と、上のフィールドで指定するパラメータ（`authorization_details`・`acr_values`・`prompt`・`max_age`・`grant_management_action`）は指定できない。指定するとリクエストを送らずにエラーを返す。
 
 `MaxAge` は認可リクエストの `max_age` パラメータとして送られ、IdP が認可リクエストの時点で再認証が必要かを判定する。`ExchangeCode` は `auth_time` の経過時間を検証しない。認証からの経過時間で制限したい場合は、`TokenSet.IDTokenClaims.AuthTime` を使ってアプリ側で判定すること。
 PAR を使う場合も、`oidc.ClientContext` / `oauth2.HTTPClient` で `ctx` に設定した HTTP client が使用される。
@@ -136,6 +162,14 @@ fmt.Println(tokenSet.IDTokenClaims.JPKIVerified)  // JPKI 紐づけ状態
 #### `Client.RefreshToken(ctx, refreshToken string) (*TokenSet, error)`
 
 リフレッシュトークンでアクセストークンを更新する。レスポンスに新しい ID Token が含まれる場合は署名・issuer・audience・expiry を検証し、成功した場合のみ `IDTokenClaims` もセットされる。
+
+#### `Client.RevokeToken(ctx, token, tokenTypeHint string) error`
+
+アクセストークンまたはリフレッシュトークンを失効させる (RFC 7009)。`tokenTypeHint` は `"access_token"` / `"refresh_token"`、不要なら空文字列。revocation endpoint は discovery metadata から取得する。IdP がエラーを返した場合は `*oauth2.RetrieveError` を返す。
+
+#### `Client.ClientAssertion(ctx) (string, error)`
+
+private_key_jwt の client assertion を生成する。`ClientPrivateKey` の設定が必要。詳細は [private_key_jwt](#private_key_jwt) を参照。
 
 ### TokenSet
 
@@ -269,7 +303,7 @@ klon.ResourceEmailAddress    // "klon/email_address"
 
 ## 動作環境
 
-- Go 1.25 以降
+- Go 1.26.10 以降
 
 ## ライセンス
 
