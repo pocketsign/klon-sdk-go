@@ -63,6 +63,13 @@ func buildAuthorizeRequestParams(opt AuthorizeOptions) (url.Values, error) {
 	for key, value := range opt.ExtraParams {
 		params.Set(key, value)
 	}
+	claims, err := buildClaims(opt.claims, opt.ExtraParams["claims"])
+	if err != nil {
+		return nil, err
+	}
+	if claims != "" {
+		params.Set("claims", claims)
+	}
 	return params, nil
 }
 
