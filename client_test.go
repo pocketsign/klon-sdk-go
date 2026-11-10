@@ -176,7 +176,7 @@ func TestClient_Authorize(t *testing.T) {
 	})
 
 	t.Run("generates authorization URL with PKCE", func(t *testing.T) {
-		authURL, session, err := client.CreateAuthorizationURL(t.Context())
+		authURL, session, err := client.CreateAuthorizationURL(t.Context(), AuthorizeOptions{})
 		require.NoError(t, err)
 		require.NotNil(t, authURL)
 		require.NotNil(t, session)
@@ -276,7 +276,7 @@ func TestClient_ExchangeCode(t *testing.T) {
 	})
 
 	t.Run("exchanges code for tokens", func(t *testing.T) {
-		_, session, err := client.CreateAuthorizationURL(t.Context())
+		_, session, err := client.CreateAuthorizationURL(t.Context(), AuthorizeOptions{})
 		require.NoError(t, err)
 
 		session.Nonce = "test-nonce"
@@ -302,7 +302,7 @@ func TestClient_ExchangeCode(t *testing.T) {
 	})
 
 	t.Run("state mismatch returns error", func(t *testing.T) {
-		_, session, err := client.CreateAuthorizationURL(t.Context())
+		_, session, err := client.CreateAuthorizationURL(t.Context(), AuthorizeOptions{})
 		require.NoError(t, err)
 
 		_, err = client.ExchangeCode(t.Context(), "test-code", "wrong-state", session)
@@ -310,7 +310,7 @@ func TestClient_ExchangeCode(t *testing.T) {
 	})
 
 	t.Run("nonce mismatch returns error", func(t *testing.T) {
-		_, session, err := client.CreateAuthorizationURL(t.Context())
+		_, session, err := client.CreateAuthorizationURL(t.Context(), AuthorizeOptions{})
 		require.NoError(t, err)
 
 		session.Nonce = "wrong-nonce"
@@ -412,9 +412,9 @@ func TestClient_DiscoveryCaching(t *testing.T) {
 		RedirectURI: "http://localhost/callback",
 	})
 
-	_, _, err := client.CreateAuthorizationURL(t.Context())
+	_, _, err := client.CreateAuthorizationURL(t.Context(), AuthorizeOptions{})
 	require.NoError(t, err)
-	_, _, err = client.CreateAuthorizationURL(t.Context())
+	_, _, err = client.CreateAuthorizationURL(t.Context(), AuthorizeOptions{})
 	require.NoError(t, err)
 
 	require.Equal(t, 1, callCount, "discovery should be called only once")

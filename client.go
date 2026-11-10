@@ -36,6 +36,8 @@ type AuthorizeOptions struct {
 	// 認可 URL と PAR のどちらでも同じ値を送る。
 	// SDK が管理するパラメータ (state・nonce・PKCE など) や、上のフィールドで指定するパラメータは指定できない (エラーになる)。
 	ExtraParams map[string]string
+
+	claims claimsRequest // WithIDTokenClaim などで指定したクレーム
 }
 
 // AuthorizationSession は認可コード交換に必要なフロー状態を保持する。
@@ -103,10 +105,12 @@ func (c *Client) oauth2Config(scopes []string) *oauth2.Config {
 
 // CreateAuthorizationURL は PKCE 付きの認可 URL を生成する。
 // 返された session はコールバック処理に必要なのでセッションストレージに保存すること。
-func (c *Client) CreateAuthorizationURL(ctx context.Context, opts ...AuthorizeOptions) (*url.URL, *AuthorizationSession, error) {
-	var opt AuthorizeOptions
-	if len(opts) > 0 {
-		opt = opts[0]
+// funcs には WithIDTokenClaim などのオプション関数を渡せる。opt を適用した後に、渡した順で呼ぶ。
+func (c *Client) CreateAuthorizationURL(ctx context.Context, opt AuthorizeOptions, funcs ...AuthorizeOptionFunc) (*url.URL, *AuthorizationSession, error) {
+	for _, f := range funcs {
+		if f != nil {
+			f(&opt)
+		}
 	}
 	if err := validatePromptValues(opt.Prompt); err != nil {
 		return nil, nil, err

@@ -11,7 +11,7 @@ import (
 // (state・nonce・PKCE はリクエストごとに変わるので比べない)。
 var authorizeParamsComparedKeys = []string{
 	"response_type", "redirect_uri", "scope", "code_challenge_method",
-	"authorization_details", "acr_values", "prompt", "max_age", "grant_management_action",
+	"authorization_details", "acr_values", "prompt", "max_age", "grant_management_action", "claims",
 	"ui_locales", "login_hint",
 }
 
@@ -31,6 +31,7 @@ func TestClient_Authorize_ExtraParams(t *testing.T) {
 			"login_hint": "user@example.com",
 		},
 	}
+	acrClaim := WithIDTokenClaim("acr", Essential(), ClaimValues(AcrHigh))
 
 	t.Run("認可 URL と PAR に同じ値で追加パラメータを載せる", func(t *testing.T) {
 		var parForm url.Values
@@ -43,17 +44,18 @@ func TestClient_Authorize_ExtraParams(t *testing.T) {
 			RedirectURI: "http://localhost/callback",
 		})
 
-		authURL, _, err := client.CreateAuthorizationURL(t.Context(), opt)
+		authURL, _, err := client.CreateAuthorizationURL(t.Context(), opt, acrClaim)
 		require.NoError(t, err)
 		parOpt := opt
 		parOpt.UsePAR = true
-		_, _, err = client.CreateAuthorizationURL(t.Context(), parOpt)
+		_, _, err = client.CreateAuthorizationURL(t.Context(), parOpt, acrClaim)
 		require.NoError(t, err)
 		require.NotNil(t, parForm)
 
 		query := authURL.Query()
 		require.Equal(t, "ja", query.Get("ui_locales"))
 		require.Equal(t, "user@example.com", query.Get("login_hint"))
+		require.JSONEq(t, `{"id_token":{"acr":{"essential":true,"values":["urn:klon:acr:high"]}}}`, query.Get("claims"))
 		for _, key := range authorizeParamsComparedKeys {
 			require.Equal(t, query[key], parForm[key], key)
 		}
@@ -69,7 +71,7 @@ func TestClient_Authorize_ExtraParams(t *testing.T) {
 
 		withoutExtra := opt
 		withoutExtra.ExtraParams = nil
-		authURL, _, err := client.CreateAuthorizationURL(t.Context(), withoutExtra)
+		authURL, _, err := client.CreateAuthorizationURL(t.Context(), withoutExtra, acrClaim)
 		require.NoError(t, err)
 
 		keys := make([]string, 0, len(authURL.Query()))
@@ -79,7 +81,7 @@ func TestClient_Authorize_ExtraParams(t *testing.T) {
 		require.ElementsMatch(t, []string{
 			"client_id", "response_type", "redirect_uri", "scope", "state", "nonce",
 			"code_challenge", "code_challenge_method",
-			"authorization_details", "acr_values", "prompt", "max_age", "grant_management_action",
+			"authorization_details", "acr_values", "prompt", "max_age", "grant_management_action", "claims",
 		}, keys)
 	})
 
@@ -96,6 +98,85 @@ func TestClient_Authorize_ExtraParams(t *testing.T) {
 		})
 		require.NoError(t, err)
 		require.Equal(t, "login custom_prompt", authURL.Query().Get("prompt"))
+	})
+}
+
+func TestClient_Authorize_Claims(t *testing.T) {
+	server, _ := testOIDCServer(t)
+	client := NewClient(ClientConfig{
+		Issuer:      server.URL,
+		ClientID:    "test-client",
+		RedirectURI: "http://localhost/callback",
+	})
+
+	t.Run("null 要求と value のオブジェクトを JSON にして送る", func(t *testing.T) {
+		authURL, _, err := client.CreateAuthorizationURL(t.Context(), AuthorizeOptions{},
+			WithIDTokenClaim("auth_time"),
+			WithIDTokenClaim("custom", ClaimValue(map[string]any{"sub": "abc"})),
+			WithUserinfoClaim("email", Essential()),
+		)
+		require.NoError(t, err)
+		require.JSONEq(t,
+			`{"id_token":{"auth_time":null,"custom":{"value":{"sub":"abc"}}},"userinfo":{"email":{"essential":true}}}`,
+			authURL.Query().Get("claims"))
+	})
+
+	t.Run("SDK の外で定義したオプション関数も AuthorizeOptions の後に適用する", func(t *testing.T) {
+		withLocale := AuthorizeOptionFunc(func(o *AuthorizeOptions) {
+			o.ExtraParams["ui_locales"] = "ja"
+		})
+		authURL, _, err := client.CreateAuthorizationURL(t.Context(),
+			AuthorizeOptions{ExtraParams: map[string]string{"login_hint": "user@example.com"}},
+			withLocale,
+		)
+		require.NoError(t, err)
+		require.Equal(t, "ja", authURL.Query().Get("ui_locales"))
+		require.Equal(t, "user@example.com", authURL.Query().Get("login_hint"))
+	})
+
+	t.Run("オプション関数を使わなければ ExtraParams の claims をそのまま送る", func(t *testing.T) {
+		authURL, _, err := client.CreateAuthorizationURL(t.Context(), AuthorizeOptions{
+			ExtraParams: map[string]string{"claims": `{"id_token":{"acr":null}}`},
+		})
+		require.NoError(t, err)
+		require.JSONEq(t, `{"id_token":{"acr":null}}`, authURL.Query().Get("claims"))
+	})
+
+	for _, usePAR := range []bool{false, true} {
+		t.Run("ExtraParams の claims とマージする", func(t *testing.T) {
+			var parForm url.Values
+			server, _ := testOIDCServerWithOptions(t, testOIDCServerOptions{
+				capturePARForm: func(form url.Values) { parForm = form },
+			})
+			client := NewClient(ClientConfig{Issuer: server.URL, ClientID: "test-client", RedirectURI: "http://localhost/callback"})
+			authURL, _, err := client.CreateAuthorizationURL(t.Context(),
+				AuthorizeOptions{UsePAR: usePAR, ExtraParams: map[string]string{"claims": `{"id_token":{"acr":null},"userinfo":{"email":null}}`}},
+				WithIDTokenClaim("act", ClaimValue(map[string]string{"sub": "abc"})),
+				WithUserinfoClaim("name"),
+			)
+			require.NoError(t, err)
+			got := authURL.Query().Get("claims")
+			if usePAR {
+				got = parForm.Get("claims")
+			}
+			require.JSONEq(t, `{"id_token":{"acr":null,"act":{"value":{"sub":"abc"}}},"userinfo":{"email":null,"name":null}}`, got)
+		})
+	}
+
+	t.Run("同じクレームを ExtraParams とオプション関数の両方で指定したらエラーにする", func(t *testing.T) {
+		_, _, err := client.CreateAuthorizationURL(t.Context(),
+			AuthorizeOptions{ExtraParams: map[string]string{"claims": `{"id_token":{"acr":null}}`}},
+			WithIDTokenClaim("acr", Essential()),
+		)
+		require.ErrorContains(t, err, `claim "acr" in id_token is specified in both ExtraParams and claim options`)
+	})
+
+	t.Run("マージできない ExtraParams の claims はエラーにする", func(t *testing.T) {
+		_, _, err := client.CreateAuthorizationURL(t.Context(),
+			AuthorizeOptions{ExtraParams: map[string]string{"claims": `not json`}},
+			WithIDTokenClaim("acr"),
+		)
+		require.ErrorContains(t, err, `extra authorize parameter "claims" must be a claims request JSON`)
 	})
 }
 

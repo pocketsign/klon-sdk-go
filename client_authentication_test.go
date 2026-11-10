@@ -165,7 +165,7 @@ func TestClient_InvalidPrivateKeyConfig(t *testing.T) {
 		{ClientPrivateKey: &ClientPrivateKey{Key: externalTestSigner{publicKey: (*ecdsa.PublicKey)(nil)}, KeyID: "key"}},
 	} {
 		client := NewClient(config)
-		_, _, err := client.CreateAuthorizationURL(t.Context())
+		_, _, err := client.CreateAuthorizationURL(t.Context(), AuthorizeOptions{})
 		require.ErrorContains(t, err, "ClientPrivateKey")
 		_, err = client.RefreshToken(t.Context(), "refresh")
 		require.ErrorContains(t, err, "ClientPrivateKey")

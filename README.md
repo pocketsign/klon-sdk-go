@@ -116,7 +116,7 @@ type ClientConfig struct {
 }
 ```
 
-#### `Client.CreateAuthorizationURL(ctx, opts ...AuthorizeOptions) (*url.URL, *AuthorizationSession, error)`
+#### `Client.CreateAuthorizationURL(ctx, opt AuthorizeOptions, funcs ...AuthorizeOptionFunc) (*url.URL, *AuthorizationSession, error)`
 
 認可 URL を生成する。返された `session` はコールバック処理に必要なので保存すること。
 
@@ -132,6 +132,19 @@ type AuthorizeOptions struct {
 	ExtraParams           map[string]string          // 認可リクエストに追加する任意のパラメータ
 }
 ```
+
+`claims` パラメータ（OIDC Core 5.5）でクレームを要求するときは、オプション関数を `AuthorizeOptions` の後に渡す。ID Token のクレームは `WithIDTokenClaim`、UserInfo のクレームは `WithUserinfoClaim` で指定し、`Essential()` / `ClaimValue(v)` / `ClaimValues(v...)` で要求の中身を決める（何も渡さなければ JSON の `null`）。SDK が JSON にして、`UsePAR` の有無にかかわらず同じ値を送る。
+
+```go
+// ID トークンの acr を必須のクレームとして要求する
+authURL, session, err := client.CreateAuthorizationURL(ctx,
+	klon.AuthorizeOptions{Prompt: []string{klon.PromptLogin}},
+	klon.WithIDTokenClaim("acr", klon.ClaimValues(klon.AcrHigh), klon.Essential()),
+)
+```
+
+`ExtraParams` にも `claims` があれば、そこにマージして送る。同じクレームを両方で指定したり、`ExtraParams` の `claims` が JSON として読めなかったりすると、リクエストを送らずにエラーを返す。
+
 
 `ExtraParams` は、上のフィールドに無いパラメータを認可リクエストに追加するときに使う。`UsePAR` の有無にかかわらず同じ値を送る（PAR ではリクエストボディに、PAR を使わない場合は認可 URL に入る）。
 
